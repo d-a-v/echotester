@@ -243,7 +243,7 @@ void echotester (int sock)
 							break;
 						}
 					int j = i + pr > 16? i - 16: 0;
-					int k = i + 16 + pr < size? i + 16: size - 1;
+					int k = i + 16 + (ssize_t)pr < size? i + 16: size - 1;
 					for (; j < k; j++)
 						printf("@%Lx:R%02x/S%02x\n", j + recvd, (uint8_t)bufin[j + pr], (uint8_t)bufout[j + ptrrecv]);
 					printf("\n");
