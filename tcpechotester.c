@@ -152,6 +152,8 @@ void help (void)
 	       "-p n	set port\n"
 	       "-d host	set remote host name\n"
 	       "-f	set TCP_NODELAY option\n"
+	       "-c n	use this char instead of random data\n"
+	       "-c -1	increasing data from 0\n"
 	       "default: localhost:10102\n"
 	       "\n");
 }
@@ -349,9 +351,10 @@ int main (int argc, char* argv[])
 	int port = 10102;
 	int server = 0;
 	int i;
+	int userchar = 0;
 	//int nodelay = 0;
 	
-	while ((op = getopt(argc, argv, "hp:d:fs")) != EOF) switch(op)
+	while ((op = getopt(argc, argv, "hp:d:fsc:")) != EOF) switch(op)
 	{
 		case 'h':
 			help();
@@ -373,6 +376,10 @@ int main (int argc, char* argv[])
 			server = 1;
 			break;
 		
+		case 'c':
+			userchar = atoi(optarg);
+			break;
+		
 		default:
 			printf("option '%c' not recognized\n", op);
 			help();
@@ -380,15 +387,13 @@ int main (int argc, char* argv[])
 	}
 	
 	for (i = 0; i < BUFLEN; i++)
-	{
-	#if 1
-		bufout[i] = random() >> 23;
-	#else
-		char c = i & 0x0f;
-		c += c > 9? 'a' - 10: '0';
-		bufout[i] = c;
-	#endif
-	}
+		switch (userchar)
+		{
+		case -1: bufout[i] = i; break;
+		case 0: bufout[i] = random() >> 23; break;
+		default: bufout[i] = userchar;
+		}
+		
 
 	int sock = my_socket();
 	if (server)
