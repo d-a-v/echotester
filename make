@@ -1,1 +1,1 @@
-gcc -Wall -Wextra tcpechotester.c -o tcpechotester
+gcc -g -Wall -Wextra tcpechotester.c -o tcpechotester
