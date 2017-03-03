@@ -29,21 +29,21 @@ void getsetflag (int sock, int sock2, int level, int flag, int val, const char* 
 	if (getsockopt(sock, level, flag, ret, &retlen) == -1)
 	{
 		perror("getsockopt");
-		exit(1);
+		abort();
 	}
 	printf("flag = %s(%i): %i(len=%i) - set it to %i - ", name, flag, *(int*)ret, retlen, locval);
 	fflush(stdout);
 	if (setsockopt(sock, level, flag, &locval, sizeof(locval)) == -1)
 	{
 		perror("setsockopt");
-		exit(1);
+		abort();
 	}
 	retlen = sizeof(int);
 	*(int*)ret = 0;
 	if (getsockopt(sock, level, flag, &ret, &retlen) == -1)
 	{
 		perror("getsockopt");
-		exit(1);
+		abort();
 	}
 	printf("re-read: %i(len=%i)\n", *(int*)ret, retlen);
 	
@@ -59,7 +59,7 @@ void setflag (int sock, int sock2, int level, int flag, int val, const char* nam
 	if (setsockopt(sock, level, flag, &locval, sizeof(locval)) == -1)
 	{
 		perror("setsockopt");
-		exit(1);
+		abort();
 	}
 	if (sock2 > 0 && sock2 != sock)
 		setflag(sock2, -1, level, flag, val, name);
@@ -71,7 +71,7 @@ int my_socket (void)
 	if ((sock = socket(AF_INET, SOCK_STREAM, 0)) == -1)
 	{
 		perror("socket()");
-		exit(1);
+		abort();
 	}
 	return sock;
 }
@@ -86,13 +86,13 @@ void my_bind_listen (int srvsock,  int port)
 	if (bind(srvsock, (struct sockaddr*)&server, sizeof(server)) == -1)
 	{
 		perror("bind()");
-		exit(1);
+		abort();
 	}
 	
 	if (listen(srvsock, 1) == -1)
 	{
 		perror("listen()");
-		exit(1);
+		abort();
 	}
 	
 	printf("bind & listen done.\n");
@@ -108,7 +108,7 @@ int my_accept (int srvsock)
 	if ((clisock = accept(srvsock, (struct sockaddr*)&client, &n)) == -1)
 	{
 		perror("accept()");
-		exit(1);
+		abort();
 	}
 	
 	printf("remote client arrived.\n");
@@ -124,7 +124,7 @@ void my_connect (const char* servername,  int port,  int sock)
 	if ((desc_server = gethostbyname(servername)) == NULL)
 	{
 		perror("gethostbyname()");
-		exit(1);
+		abort();
 	}
 	
 	server.sin_family = AF_INET;
@@ -133,7 +133,7 @@ void my_connect (const char* servername,  int port,  int sock)
 	if (connect(sock, (struct sockaddr*)&server, sizeof(server)) == -1)
 	{
 		perror("connect()");
-		exit(1);
+		abort();
 	}
 	
 	printf("connected to %s.\n", servername);
@@ -152,8 +152,11 @@ void help (void)
 	       "-p n	set port\n"
 	       "-d host	set remote host name\n"
 	       "-f	set TCP_NODELAY option\n"
+	       "-S	server\n"
 	       "-c n	use this char instead of random data\n"
 	       "-c -1	increasing data from 0\n"
+	       "-s n	size (client only)\n"
+	       "-s -n	random size in [1..n] (client only)\n"
 	       "default: localhost:10102\n"
 	       "\n");
 }
@@ -196,7 +199,7 @@ void setcntl (int fd, int cmd, int flags, const char* name)
 		perror(name);
 }
 
-void echotester (int sock)
+void echotester (int sock, int datasize)
 {
 	setcntl(sock, F_SETFL, O_NONBLOCK, "O_NONBLOCK");
 	
@@ -206,17 +209,21 @@ void echotester (int sock)
 	struct pollfd pollfd = { .fd = sock, .events = POLLIN | POLLOUT, };
 	struct timeval tb, ti, te;
 	
+	if (datasize < 0)
+		datasize = (random() % -datasize) + 1;
+	
 	gettimeofday(&tb, NULL);
 	ti = tb;
 	
-	while (1)
+	int cont = 1;
+	while (cont)
 	{
 		int ret = poll(&pollfd, 1, 1000 /*ms*/);
 		
 		if (ret == -1)
 		{
 			perror("poll");
-			exit(1);
+			abort();
 		}
 
 		if (pollfd.revents & POLLIN)
@@ -225,7 +232,7 @@ void echotester (int sock)
 			if (ret == -1)
 			{
 				perror("read");
-				exit(1);
+				abort();
 			}
 			size_t pr = 0;
 			while (ret)
@@ -250,7 +257,7 @@ void echotester (int sock)
 						printf("@%llx:R%02x/S%02x\n", j + recvd, (uint8_t)bufin[j + pr], (uint8_t)bufout[j + ptrrecv]);
 					printf("\n");
 					
-					exit(1);
+					abort();
 				}
 				recvd += size;
 				recvdnow += size;
@@ -263,18 +270,24 @@ void echotester (int sock)
 		if (pollfd.revents & POLLOUT)
 		{
 			ssize_t size = BUFLEN - ptrsend;
-			ssize_t ret = write(sock, bufout + ptrsend, size);
-			if (ret == -1)
+			if (datasize && (sent + size > datasize))
+				size = datasize - sent;
+			if (size)
 			{
-				perror("write");
-				exit(1);
+				ssize_t ret = write(sock, bufout + ptrsend, size);
+				if (ret == -1)
+				{
+					perror("write");
+					abort();
+				}
+				sent += ret;
+				ptrsend = (ptrsend + ret) & (BUFLEN - 1);
 			}
-			sent += ret;
-			ptrsend = (ptrsend + ret) & (BUFLEN - 1);
 		}
 		
 		gettimeofday(&te, NULL);
-		if (te.tv_sec - ti.tv_sec > 1)
+		cont = !datasize || datasize > sent || datasize > recvd;
+		if (!cont || te.tv_sec - ti.tv_sec > 1)
 		{
 			printbw(te.tv_sec - tb.tv_sec, te.tv_usec - tb.tv_usec, recvd, "avg:");
 			printbw(te.tv_sec - ti.tv_sec, te.tv_usec - ti.tv_usec, recvdnow, "now:");
@@ -284,6 +297,8 @@ void echotester (int sock)
 			recvdnow = 0;
 		}
 	}
+	
+	fprintf(stderr, "\nsend&received %lli / %lli bytes (%i)\n", sent, recvd, datasize);
 
 	my_close(sock);
 }
@@ -307,7 +322,8 @@ void echoserver (int sock)
 		if (ret == -1)
 		{
 			perror("poll");
-			exit(1);
+			close(sock);
+			return;
 		}
 
 		if (pollfd.revents & POLLIN)
@@ -319,7 +335,12 @@ void echoserver (int sock)
 			if (ret == -1)
 			{
 				perror("read");
-				exit(1);
+				break;
+			}
+			if (ret == 0)
+			{
+				fprintf(stderr, "peer has closed\n");
+				break;
 			}
 			inbuf += ret;
 			ptrrecv = (ptrrecv + ret) & (BUFLEN - 1);
@@ -334,10 +355,16 @@ void echoserver (int sock)
 			if (ret == -1)
 			{
 				perror("write");
-				exit(1);
+				break;
 			}
 			inbuf -= ret;
 			ptrsend = (ptrsend + ret) & (BUFLEN - 1);
+		}
+		
+		if (pollfd.revents & ~(POLLIN | POLLOUT))
+		{
+			fprintf(stderr, "unregular event occured\n");
+			break;
 		}
 	}
 
@@ -352,9 +379,14 @@ int main (int argc, char* argv[])
 	int server = 0;
 	int i;
 	int userchar = 0;
+	int datasize = 0;
 	//int nodelay = 0;
 	
-	while ((op = getopt(argc, argv, "hp:d:fsc:")) != EOF) switch(op)
+	struct timeval t;
+	gettimeofday(&t, NULL);
+	srandom(t.tv_sec + t.tv_usec);
+
+	while ((op = getopt(argc, argv, "hp:d:fSc:s:")) != EOF) switch(op)
 	{
 		case 'h':
 			help();
@@ -372,12 +404,16 @@ int main (int argc, char* argv[])
 //			nodelay = 1;
 //			break;
 
-		case 's':
+		case 'S':
 			server = 1;
 			break;
 		
 		case 'c':
 			userchar = atoi(optarg);
+			break;
+		
+		case 's':
+			datasize = atoi(optarg);
 			break;
 		
 		default:
@@ -398,10 +434,13 @@ int main (int argc, char* argv[])
 	int sock = my_socket();
 	if (server)
 	{
-		printf("waiting on port %i\n", port);
 		my_bind_listen(sock, port);
-		int clisock = my_accept(sock);
-		echoserver(clisock);
+		while (1)
+		{
+			printf("waiting on port %i\n", port);
+			int clisock = my_accept(sock);
+			echoserver(clisock);
+		}
 		close(sock);
 	}
 	else
@@ -411,7 +450,7 @@ int main (int argc, char* argv[])
 		       host, port);
 	
 		my_connect(host, port, sock);
-		echotester(sock);
+		echotester(sock, datasize);
 	}
 	
 	return 0;
