@@ -235,19 +235,19 @@ void echotester (int sock)
 					size = BUFLEN - ptrrecv;
 				if (memcmp(bufin + pr, bufout + ptrrecv, size) != 0)
 				{
-					fprintf(stderr, "\ndata differ (sent=%Li revcd=%Li ptrsend=%i ptrrecv=%i ret=%i size=%i)\n", sent, recvd, ptrsend, ptrrecv, (int)ret, (int)size);
+					fprintf(stderr, "\ndata differ (sent=%lli revcd=%lli ptrsend=%i ptrrecv=%i ret=%i size=%i)\n", sent, recvd, ptrsend, ptrrecv, (int)ret, (int)size);
 					
 					int i = 0;
 					for (i = 0; i < size; i++)
 						if (bufin[i + pr] != bufout[i + ptrrecv])
 						{
-							printf("offset-diff @%Li @0x%Lx\n", i + recvd, i + recvd);
+							printf("offset-diff @%lli @0x%llx\n", i + recvd, i + recvd);
 							break;
 						}
 					int j = i + pr > 16? i - 16: 0;
 					int k = i + 16 + (ssize_t)pr < size? i + 16: size - 1;
 					for (; j < k; j++)
-						printf("@%Lx:R%02x/S%02x\n", j + recvd, (uint8_t)bufin[j + pr], (uint8_t)bufout[j + ptrrecv]);
+						printf("@%llx:R%02x/S%02x\n", j + recvd, (uint8_t)bufin[j + pr], (uint8_t)bufout[j + ptrrecv]);
 					printf("\n");
 					
 					exit(1);
