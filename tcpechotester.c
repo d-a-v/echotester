@@ -200,8 +200,51 @@ void setcntl (int fd, int cmd, int flags, const char* name)
 		perror(name);
 }
 
+int flushinput (int sock)
+{
+	struct pollfd pollfd = { .fd = sock, .events = POLLIN, };
+	fprintf(stderr, "flushing input...\n");
+	while (1)
+	{
+		pollfd.events =  POLLIN;
+		int ret = poll(&pollfd, 1, 1000 /*ms*/);
+		
+		if (ret == -1)
+		{
+			perror("poll");
+			close(sock);
+			return 0;
+		}
+
+		if (pollfd.revents & POLLIN)
+		{
+			char b[1024];
+			ssize_t ret = read(sock, b, sizeof b);
+			if (ret == -1)
+			{
+				perror("read");
+				return 0;
+			}
+			if (ret == 0)
+			{
+				fprintf(stderr, "peer has closed\n");
+				return 0;
+			}
+			fprintf(stderr, "flushed %i bytes\n", (int)ret);
+		}
+		else 
+		{
+			fprintf(stderr, "...done\n");
+			return 1;
+		}
+	}
+}
+
 void echotester (int sock, int datasize)
 {
+	if (!flushinput(sock))
+		return;
+	
 	setcntl(sock, F_SETFL, O_NONBLOCK, "O_NONBLOCK");
 	
 	long long sent = 0, recvd = 0, recvdnow = 0;
