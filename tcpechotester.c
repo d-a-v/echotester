@@ -152,7 +152,8 @@ void help (void)
 	       "-p n	set port\n"
 	       "-d host	set remote host name\n"
 	       "-f	set TCP_NODELAY option\n"
-	       "-S	server\n"
+	       "-S	server (server read and send back)\n"
+	       "-A	active server (server sends and checks)\n"
 	       "-c n	use this char instead of random data\n"
 	       "-c -1	increasing data from 0\n"
 	       "-s n	size (client only)\n"
@@ -377,6 +378,7 @@ int main (int argc, char* argv[])
 	const char* host = "localhost";
 	int port = 10102;
 	int server = 0;
+	int activeserver = 0;
 	int i;
 	int userchar = 0;
 	int datasize = 0;
@@ -386,7 +388,7 @@ int main (int argc, char* argv[])
 	gettimeofday(&t, NULL);
 	srandom(t.tv_sec + t.tv_usec);
 
-	while ((op = getopt(argc, argv, "hp:d:fSc:s:")) != EOF) switch(op)
+	while ((op = getopt(argc, argv, "hp:d:fSc:s:A")) != EOF) switch(op)
 	{
 		case 'h':
 			help();
@@ -406,6 +408,10 @@ int main (int argc, char* argv[])
 
 		case 'S':
 			server = 1;
+			break;
+		
+		case 'A':
+			activeserver = 1;
 			break;
 		
 		case 'c':
@@ -440,6 +446,17 @@ int main (int argc, char* argv[])
 			printf("waiting on port %i\n", port);
 			int clisock = my_accept(sock);
 			echoserver(clisock);
+		}
+		close(sock);
+	}
+	else if (activeserver)
+	{
+		my_bind_listen(sock, port);
+		while (1)
+		{
+			printf("waiting on port %i\n", port);
+			int clisock = my_accept(sock);
+			echotester(clisock, datasize);
 		}
 		close(sock);
 	}
