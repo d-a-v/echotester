@@ -245,7 +245,7 @@ void echotester (int sock, int datasize)
 				{
 					fprintf(stderr, "\ndata differ (sent=%lli revcd=%lli ptrsend=%i ptrrecv=%i ret=%i size=%i)\n", sent, recvd, ptrsend, ptrrecv, (int)ret, (int)size);
 					
-					int i = 0;
+					int i;
 					for (i = 0; i < size; i++)
 						if (bufin[i + pr] != bufout[i + ptrrecv])
 						{
@@ -253,7 +253,8 @@ void echotester (int sock, int datasize)
 							break;
 						}
 					int j = i + pr > 16? i - 16: 0;
-					int k = i + 16 + (ssize_t)pr < size? i + 16: size - 1;
+					//int k = ((j + 16 + (ssize_t)ptrrecv) < size)? (j + 16): size;
+					int k = (i + 16 + (ssize_t)pr) <= size? (i + 16): size;
 					for (; j < k; j++)
 						printf("@%llx:R%02x/S%02x\n", j + recvd, (uint8_t)bufin[j + pr], (uint8_t)bufout[j + ptrrecv]);
 					printf("\n");
