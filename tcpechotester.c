@@ -334,10 +334,11 @@ void echotester (int sock, int datasize)
 		cont = !datasize || datasize > sent || datasize > recvd;
 		if (!cont || te.tv_sec - ti.tv_sec > 1)
 		{
+			printf("\r");
 			printbw(te.tv_sec - tb.tv_sec, te.tv_usec - tb.tv_usec, recvd, "avg:");
 			printbw(te.tv_sec - ti.tv_sec, te.tv_usec - ti.tv_usec, recvdnow, "now:");
 			printsz(recvd, "size:");
-			printf("-----\r"); fflush(stdout);
+			printf("-----"); fflush(stdout);
 			ti = te;
 			recvdnow = 0;
 		}
