@@ -15,7 +15,9 @@
 #include <termios.h>
 #include <errno.h>
 #include <ctype.h>
+#include <assert.h>
 
+#define DEFAULTPORT 6969 // spin round
 #define BUFLENLOG2 10
 #define BUFLEN (1<<(BUFLENLOG2))
 static char bufout [BUFLEN];
@@ -152,20 +154,30 @@ void help (void)
 {
 	printf("** TCP echo tester - options are:\n"
 	       "-h	this help\n"
-	       "-p n	set tcp port\n"
-	       "-d host	set tcp remote host name\n"
+	       "-f	flush input before start\n"
+	       "-R	responder (read and send back)\n"
+	       "-C	comparator (send and check back)\n"
+	       "\n"
+	       "Comparator specifics:\n"
+	       "-c n	use this char instead of random data\n"
+	       "-c -1	increasing data from 0\n"
+	       "-s n	size (instead of infinite)\n"
+	       "-s -n	random size in [1..n]\n"
+	       "-w n	pause output to ensure sizesent-sizerecv < n\n"
+	       "\n"
+	       "Serial:\n"
 	       "-y tty	use tty device\n"
 	       "-b baud	for tty device\n"
 	       "-m 8n1	for tty device\n"
-	       "-f	set TCP_NODELAY option\n"
-	       "-S	server (server read and send back)\n"
-	       "-A	active server (server sends and checks)\n"
-	       "-c n	use this char instead of random data\n"
-	       "-c -1	increasing data from 0\n"
-	       "-s n	size (client only)\n"
-	       "-s -n	random size in [1..n] (client only)\n"
-	       "default: localhost:10102\n"
-	       "\n");
+	       "\n"
+	       "TCP:\n"
+	       "-n	set TCP_NODELAY option\n"
+	       "-p n	set tcp port (default %i)\n"
+	       "\n"
+	       "TCP client:\n"
+	       "-d host	set tcp remote host name\n"
+	       "(otherwise act as TCP server)\n"
+	       "\n", DEFAULTPORT);
 }
 
 long long bwbps (int diff_s, int diff_us, long long size)
@@ -246,21 +258,18 @@ int flushinput (int sock)
 	}
 }
 
-void echotester (int sock, int datasize)
+void echocomparator (int sock, int datasize, ssize_t maxdiff)
 {
-	if (!flushinput(sock))
-		return;
-		
 	// bufout is already filled and not modified
 	// send bufout again and again
 	// verify bufin receives same data at same (offset mod bufsize)
 	
 	setcntl(sock, F_SETFL, O_NONBLOCK, "O_NONBLOCK");
 	
-	long long sent = 0, recvd = 0, recvdnow = 0;
-	int ptrsend = 0;
-	int ptrrecv = 0;
-	struct pollfd pollfd = { .fd = sock, .events = POLLIN | POLLOUT, };
+	long long total_sent = 0, total_recvd = 0, recvd_for_avg = 0;
+	int ptr_to_send = 0;
+	int ptr_for_bufout_compare = 0;
+	struct pollfd pollfd;
 	struct timeval tb, ti, te;
 	
 	if (datasize < 0)
@@ -270,8 +279,12 @@ void echotester (int sock, int datasize)
 	ti = tb;
 	
 	int cont = 1;
+	pollfd.fd = sock;
 	while (cont)
 	{
+		pollfd.events = POLLIN;
+		if (!maxdiff || total_recvd > total_sent - maxdiff)
+			pollfd.events |= POLLOUT;
 		int ret = poll(&pollfd, 1, 1000 /*ms*/);
 		
 		if (ret == -1)
@@ -288,96 +301,90 @@ void echotester (int sock, int datasize)
 				perror("read");
 				abort();
 			}
-printf("ret %i bytes, total read = %i\n", (int)ret, (int)recvd);
-			size_t pr = 0;
+			ssize_t bufin_offset = 0;
 			while (ret)
 			{
 				ssize_t size = ret;
-				if (size > BUFLEN - ptrrecv)
-					size = BUFLEN - ptrrecv;
-				if (memcmp(bufin + pr, bufout + ptrrecv, size) != 0)
+				if (size > BUFLEN - ptr_for_bufout_compare)
+					size = BUFLEN - ptr_for_bufout_compare;
+				if (memcmp(bufin + bufin_offset, bufout + ptr_for_bufout_compare, size) != 0)
 				{
-					fprintf(stderr, "\ndata differ (sent=%lli revcd=%lli ptrsend=%i ptrrecv=%i ret=%i size=%i)\n", sent, recvd, ptrsend, ptrrecv, (int)ret, (int)size);
+					fprintf(stderr, "\ndata differ (sent=%lli revcd=%lli ptrsend=%i ptr_for_bufout_compare=%i ret=%i size=%i)\n", total_sent, total_recvd, ptr_to_send, ptr_for_bufout_compare, (int)ret, (int)size);
 					
 					int i;
 					for (i = 0; i < size; i++)
-						if (bufin[i + pr] != bufout[i + ptrrecv])
+						if (bufin[i + bufin_offset] != bufout[i + ptr_for_bufout_compare])
 						{
-							printf("offset-diff @%lli @0x%llx\n", i + recvd, i + recvd);
+							printf("offset-diff @%lli @0x%llx\n", i + total_recvd, i + total_recvd);
 							break;
 						}
-printf("BUFLEN=%i size=%i bufin[i=%i + pr=%i] bufout[i=%i + ptrrecv=%i] recvdtotal=%i sent=%i\n", BUFLEN, (int)size, (int)i, (int)i, (int)pr, (int)ptrrecv, (int)recvd, (int)sent);
-#if 0
 					#define SHOW 16
-					int j = i + pr > SHOW? i - SHOW: 0;
-					int k = j + ptrrecv + SHOW + SHOW > size? size: j + SHOW + SHOW;
-printf("j=%i k=%i\n", j, k);
-					for (; j < k; j++)
-						printf("@%llx:R%02x/S%02x\n", j + recvd, (uint8_t)bufin[j + pr], (uint8_t)bufout[j + ptrrecv]);
-#else
-					int j = i + pr > 16? i - 16: 0;
-					//int k = ((j + 16 + (ssize_t)ptrrecv) < size)? (j + 16): size;
-					int k = (i + 16 + (ssize_t)pr) <= size? (i + 16): size;
-printf("j=%i k=%i\n", j, k);
-					for (; j < k; j++)
-						printf("@%llx:R%02x/S%02x\n", j + recvd, (uint8_t)bufin[j + pr], (uint8_t)bufout[j + ptrrecv]);
-#endif
+					// difference is at bufin[i + bufin_offset] and bufout[i + ptr_for_bufout_compare]
+					// show SHOW before
+					ssize_t start = i - SHOW;
+					for (ssize_t j = start + BUFLEN; j < i + BUFLEN; j++)
+						printf("@%llx:R%02x/S%02x\n", j + total_recvd - BUFLEN, (uint8_t)bufout[(j + ptr_for_bufout_compare) & (BUFLEN - 1)], (uint8_t)bufout[(j + ptr_for_bufout_compare) & (BUFLEN - 1)]);
+					// show SHOW after
+					for (ssize_t j = i; j < i + SHOW && j + bufin_offset < size; j++)
+						printf("@%llx:R%02x/S%02x (diff)\n", j + total_recvd, (uint8_t)bufin[j + bufin_offset], (uint8_t)bufout[(j + ptr_for_bufout_compare) & (BUFLEN - 1)]);
 					printf("\n");
 					
 					abort();
 				}
-				recvd += size;
-				recvdnow += size;
-				ptrrecv = (ptrrecv + size) & (BUFLEN - 1);
+				total_recvd += size;
+				recvd_for_avg += size;
+				ptr_for_bufout_compare = (ptr_for_bufout_compare + size) & (BUFLEN - 1);
 				ret -= size;
-				pr += size;
+				bufin_offset += size;
 			}
 		}
 		
 		if (pollfd.revents & POLLOUT)
 		{
-			ssize_t size = BUFLEN - ptrsend;
-			if (datasize && (sent + size > datasize))
-				size = datasize - sent;
+			ssize_t size = BUFLEN - ptr_to_send;
+			if (datasize && (total_sent + size > datasize))
+				size = datasize - total_sent;
+			if (maxdiff && size > (total_recvd - total_sent + maxdiff))
+				size = total_recvd - total_sent + maxdiff;
+assert(size);
 			if (size)
 			{
-				ssize_t ret = write(sock, bufout + ptrsend, size);
+				ssize_t ret = write(sock, bufout + ptr_to_send, size);
 				if (ret == -1)
 				{
 					perror("write");
 					abort();
 				}
-				sent += ret;
-				ptrsend = (ptrsend + ret) & (BUFLEN - 1);
-printf("sent %i bytes, total sent = %i, ptrsend = %i\n", (int)ret, (int)sent, (int)ptrsend);
+				total_sent += ret;
+				ptr_to_send = (ptr_to_send + ret) & (BUFLEN - 1);
 			}
 		}
 		
 		gettimeofday(&te, NULL);
-		cont = !datasize || datasize > sent || datasize > recvd;
+		cont = !datasize || datasize > total_sent || datasize > total_recvd;
 		if (!cont || te.tv_sec - ti.tv_sec > 1)
 		{
 			printf("\r");
-			printbw(te.tv_sec - tb.tv_sec, te.tv_usec - tb.tv_usec, recvd, "avg:");
-			printbw(te.tv_sec - ti.tv_sec, te.tv_usec - ti.tv_usec, recvdnow, "now:");
-			printsz(recvd, "size:");
+			printbw(te.tv_sec - tb.tv_sec, te.tv_usec - tb.tv_usec, total_recvd, "avg:");
+			printbw(te.tv_sec - ti.tv_sec, te.tv_usec - ti.tv_usec, recvd_for_avg, "now:");
+			printsz(total_recvd, "size:");
 			printf("-----"); fflush(stdout);
 			ti = te;
-			recvdnow = 0;
+			recvd_for_avg = 0;
 		}
 	}
 	
-	fprintf(stderr, "\nsend&received %lli / %lli bytes (%i)\n", sent, recvd, datasize);
+	fprintf(stderr, "\nsend&received %lli / %lli bytes (%i)\n", total_sent, total_recvd, datasize);
 
 	my_close(sock);
 }
 
-void echoserver (int sock)
+void echoresponder (int sock)
 {
 	setcntl(sock, F_SETFL, O_NONBLOCK, "O_NONBLOCK");
 	
-	int ptrsend = 0;
-	int ptrrecv = 0;
+	int ptr_to_send = 0;
+	int ptr_for_recv = 0;
 	size_t inbuf = 0;
 	struct pollfd pollfd = { .fd = sock, .events = POLLIN | POLLOUT, };
 	
@@ -397,9 +404,9 @@ void echoserver (int sock)
 		if (pollfd.revents & POLLIN)
 		{
 			ssize_t maxrecv = BUFLEN - inbuf;
-			if (maxrecv > BUFLEN - ptrrecv)
-				maxrecv = BUFLEN - ptrrecv;
-			ssize_t ret = read(sock, bufin + ptrrecv, maxrecv);
+			if (maxrecv > BUFLEN - ptr_for_recv)
+				maxrecv = BUFLEN - ptr_for_recv;
+			ssize_t ret = read(sock, bufin + ptr_for_recv, maxrecv);
 			if (ret == -1)
 			{
 				perror("read");
@@ -411,22 +418,22 @@ void echoserver (int sock)
 				break;
 			}
 			inbuf += ret;
-			ptrrecv = (ptrrecv + ret) & (BUFLEN - 1);
+			ptr_for_recv = (ptr_for_recv + ret) & (BUFLEN - 1);
 		}
 		
 		if (pollfd.revents & POLLOUT)
 		{
 			ssize_t maxsend = inbuf;
-			if (maxsend > BUFLEN - ptrsend)
-				maxsend = BUFLEN - ptrsend;
-			ssize_t ret = write(sock, bufin + ptrsend, maxsend);
+			if (maxsend > BUFLEN - ptr_to_send)
+				maxsend = BUFLEN - ptr_to_send;
+			ssize_t ret = write(sock, bufin + ptr_to_send, maxsend);
 			if (ret == -1)
 			{
 				perror("write");
 				break;
 			}
 			inbuf -= ret;
-			ptrsend = (ptrsend + ret) & (BUFLEN - 1);
+			ptr_to_send = (ptr_to_send + ret) & (BUFLEN - 1);
 		}
 		
 		if (pollfd.revents & ~(POLLIN | POLLOUT))
@@ -461,12 +468,6 @@ int serial_open (const char* dev, int baud, const char* mode)
 
 	tio.c_cflag = 0;
 
-	if (cfsetospeed(&tio, (speed_t)baud) || cfsetispeed(&tio, (speed_t)baud))
-	{
-		fprintf(stderr, "serial/cfset(i/o)speed: %s'n", strerror(errno));
-		close(fd);
-		return -1;
-	}
 
 	tio.c_cflag |= (CLOCAL | CREAD);    /* ignore modem controls */
 	tio.c_cflag &= ~CSIZE;
@@ -478,28 +479,39 @@ int serial_open (const char* dev, int baud, const char* mode)
 	/* setup for non-canonical mode */
 	tio.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
 	tio.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
-	tio.c_oflag &= ~(OPOST | ONLCR | OXTABS | ONOEOT);
+	tio.c_oflag &= ~(OPOST | ONLCR);// linux don't know that: | OXTABS | ONOEOT);
 
 	/* fetch bytes as they become available */
 	tio.c_cc[VMIN] = 0;
 	tio.c_cc[VTIME] = 0;
 
-#if 0	
+	speed_t b = 0;
 	switch (baud)
 	{
-	case 115200: tio.c_cflag |= B115200; break;
-	case 57600: tio.c_cflag |= B57600; break;
-	case 38400: tio.c_cflag |= B38400; break;
-	case 19200: tio.c_cflag |= B19200; break;
-	case 9600: tio.c_cflag |= B9600; break;
-	case 4800: tio.c_cflag |= B4800; break;
-	case 2400: tio.c_cflag |= B2400; break;
+	case 115200: b = B115200; break;
+	case 57600: b = B57600; break;
+	case 38400: b = B38400; break;
+	case 19200: b = B19200; break;
+	case 9600: b = B9600; break;
+	case 4800: b = B4800; break;
+	case 2400: b = B2400; break;
 	default:
 		fprintf(stderr, "invalid serial speed '%d'\n", baud);
 		close(fd);
 		return -1;
 	}
-#endif
+	if (cfsetispeed(&tio, b))
+	{
+		fprintf(stderr, "serial/cfsetispeed: %s\n", strerror(errno));
+		close(fd);
+		return -1;
+	}
+	if (cfsetospeed(&tio, b))
+	{
+		fprintf(stderr, "serial/cfsetospeed: %s\n", strerror(errno));
+		close(fd);
+		return -1;
+	}
 		
 	switch (mode[0] - '0')
 	{
@@ -569,19 +581,21 @@ int main (int argc, char* argv[])
 	const char* tty = NULL;
 	int ttyspeed = 115200;
 	const char* ttymode = "8n1";
-	int port = 10102;
-	int server = 0;
-	int activeserver = 0;
+	int port = DEFAULTPORT;
+	int responder = 0;
+	int comparator = 0;
 	int i;
 	int userchar = 0;
 	int datasize = 0;
-	//int nodelay = 0;
+	int nodelay = 0;
+	int doflushinput = 0;
+	ssize_t maxdiff = 0;
 	
 	struct timeval t;
 	gettimeofday(&t, NULL);
 	srandom(t.tv_sec + t.tv_usec);
 
-	while ((op = getopt(argc, argv, "hp:d:fSc:s:Ay:b:m:")) != EOF) switch(op)
+	while ((op = getopt(argc, argv, "hp:d:fRc:s:Cy:b:m:nfw:")) != EOF) switch(op)
 	{
 		case 'h':
 			help();
@@ -595,16 +609,20 @@ int main (int argc, char* argv[])
 			host = optarg;
 			break;
 		
-//		case 'f':
-//			nodelay = 1;
-//			break;
+		case 'n':
+			nodelay = 1;
+			break;
 
-		case 'S':
-			server = 1;
+		case 'f':
+			doflushinput = 1;
+			break;
+
+		case 'R':
+			responder = 1;
 			break;
 		
-		case 'A':
-			activeserver = 1;
+		case 'C':
+			comparator = 1;
 			break;
 		
 		case 'c':
@@ -627,12 +645,23 @@ int main (int argc, char* argv[])
 			ttymode = optarg;
 			break;
 		
+		case 'w':
+			maxdiff = atoi(optarg);
+			break;
+		
 		default:
 			printf("option '%c' not recognized\n", op);
 			help();
 			return 1;
 	}
 	
+	if (!(!!responder ^ !!comparator))
+	{
+		fprintf(stderr, "error: need only one of -R (responder) or -C (comparator) option\n\n");
+		help();
+		return 1;
+	}
+
 	for (i = 0; i < BUFLEN; i++)
 		switch (userchar)
 		{
@@ -645,7 +674,7 @@ int main (int argc, char* argv[])
 	{
 		if (host)
 		{
-			fprintf(stderr, "tcp or serial?\n");
+			fprintf(stderr, "tcp client or serial?\n");
 			exit(1);
 		}
 		
@@ -653,46 +682,56 @@ int main (int argc, char* argv[])
 		if (fd == -1)
 			exit(1);
 		
-		if (server)
-			echoserver(fd);
+		if (responder)
+			echoresponder(fd);
 		else
-			echotester(fd, datasize);
+		{
+			if (doflushinput && !flushinput(fd))
+				return 1;
+			echocomparator(fd, datasize, maxdiff);
+		}
 	}
-	else
-		if (!host)
-			host = "localhost";
 
 	int sock = my_socket();
-	if (server)
+	
+	if (host)
 	{
-		my_bind_listen(sock, port);
-		while (1)
-		{
-			printf("waiting on port %i\n", port);
-			int clisock = my_accept(sock);
-			echoserver(clisock);
-		}
-		close(sock);
-	}
-	else if (activeserver)
-	{
-		my_bind_listen(sock, port);
-		while (1)
-		{
-			printf("waiting on port %i\n", port);
-			int clisock = my_accept(sock);
-			echotester(clisock, datasize);
-		}
-		close(sock);
-	}
-	else
-	{
+		if (nodelay)
+			setflag(sock, -1, IPPROTO_TCP, TCP_NODELAY, 1, "TCP_NODELAY");
+
 		printf("remote host:	%s\n"
 		       "port:		%i\n",
 		       host, port);
 	
 		my_connect(host, port, sock);
-		echotester(sock, datasize);
+		if (responder)
+			echoresponder(sock);
+		else
+		{
+			if (doflushinput && !flushinput(sock))
+				return 1;
+			echocomparator(sock, datasize, maxdiff);
+		}
+	}
+	else
+	{
+		my_bind_listen(sock, port);
+		while (1)
+		{
+			printf("waiting on port %i\n", port);
+			int clisock = my_accept(sock);
+			if (nodelay)
+				setflag(clisock, -1, IPPROTO_TCP, TCP_NODELAY, 1, "TCP_NODELAY");
+			if (responder)
+				echoresponder(clisock);
+			else // comparator
+			{
+				if (doflushinput && !flushinput(clisock))
+					return 1;
+				echocomparator(clisock, datasize, maxdiff);
+			}
+		}
+		close(sock);
 	}
 	
 	return 0;
