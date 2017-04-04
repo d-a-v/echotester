@@ -12,6 +12,9 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <termios.h>
+#include <errno.h>
+#include <ctype.h>
 
 #define BUFLENLOG2 10
 #define BUFLEN (1<<(BUFLENLOG2))
@@ -149,8 +152,11 @@ void help (void)
 {
 	printf("** TCP echo tester - options are:\n"
 	       "-h	this help\n"
-	       "-p n	set port\n"
-	       "-d host	set remote host name\n"
+	       "-p n	set tcp port\n"
+	       "-d host	set tcp remote host name\n"
+	       "-y tty	use tty device\n"
+	       "-b baud	for tty device\n"
+	       "-m 8n1	for tty device\n"
 	       "-f	set TCP_NODELAY option\n"
 	       "-S	server (server read and send back)\n"
 	       "-A	active server (server sends and checks)\n"
@@ -244,6 +250,10 @@ void echotester (int sock, int datasize)
 {
 	if (!flushinput(sock))
 		return;
+		
+	// bufout is already filled and not modified
+	// send bufout again and again
+	// verify bufin receives same data at same (offset mod bufsize)
 	
 	setcntl(sock, F_SETFL, O_NONBLOCK, "O_NONBLOCK");
 	
@@ -278,6 +288,7 @@ void echotester (int sock, int datasize)
 				perror("read");
 				abort();
 			}
+printf("ret %i bytes, total read = %i\n", (int)ret, (int)recvd);
 			size_t pr = 0;
 			while (ret)
 			{
@@ -295,11 +306,22 @@ void echotester (int sock, int datasize)
 							printf("offset-diff @%lli @0x%llx\n", i + recvd, i + recvd);
 							break;
 						}
+printf("BUFLEN=%i size=%i bufin[i=%i + pr=%i] bufout[i=%i + ptrrecv=%i] recvdtotal=%i sent=%i\n", BUFLEN, (int)size, (int)i, (int)i, (int)pr, (int)ptrrecv, (int)recvd, (int)sent);
+#if 0
+					#define SHOW 16
+					int j = i + pr > SHOW? i - SHOW: 0;
+					int k = j + ptrrecv + SHOW + SHOW > size? size: j + SHOW + SHOW;
+printf("j=%i k=%i\n", j, k);
+					for (; j < k; j++)
+						printf("@%llx:R%02x/S%02x\n", j + recvd, (uint8_t)bufin[j + pr], (uint8_t)bufout[j + ptrrecv]);
+#else
 					int j = i + pr > 16? i - 16: 0;
 					//int k = ((j + 16 + (ssize_t)ptrrecv) < size)? (j + 16): size;
 					int k = (i + 16 + (ssize_t)pr) <= size? (i + 16): size;
+printf("j=%i k=%i\n", j, k);
 					for (; j < k; j++)
 						printf("@%llx:R%02x/S%02x\n", j + recvd, (uint8_t)bufin[j + pr], (uint8_t)bufout[j + ptrrecv]);
+#endif
 					printf("\n");
 					
 					abort();
@@ -327,6 +349,7 @@ void echotester (int sock, int datasize)
 				}
 				sent += ret;
 				ptrsend = (ptrsend + ret) & (BUFLEN - 1);
+printf("sent %i bytes, total sent = %i, ptrsend = %i\n", (int)ret, (int)sent, (int)ptrsend);
 			}
 		}
 		
@@ -364,7 +387,6 @@ void echoserver (int sock)
 		if (inbuf < BUFLEN) pollfd.events |= POLLIN;
 		if (inbuf) pollfd.events |= POLLOUT;
 		int ret = poll(&pollfd, 1, 1000 /*ms*/);
-		
 		if (ret == -1)
 		{
 			perror("poll");
@@ -417,10 +439,136 @@ void echoserver (int sock)
 	my_close(sock);
 }
 
+int serial_open (const char* dev, int baud, const char* mode)
+{
+	struct termios tio;
+
+	int fd = open(dev, O_RDWR | O_NOCTTY | O_SYNC | O_NONBLOCK);
+	if (fd == -1)
+	{
+		fprintf(stderr, "%s: %s\n", dev, strerror(errno));
+		return -1;
+	}
+	
+	fprintf(stderr, "serial device '%s' opened, fd=%i - trying %s/%i\n", dev, fd, mode, baud);
+		
+	if (tcgetattr(fd, &tio) == -1)
+	{
+		fprintf(stderr, "serial/tcgetattr: %s\n", strerror(errno));
+		close(fd);
+		return -1;
+	}
+
+	tio.c_cflag = 0;
+
+	if (cfsetospeed(&tio, (speed_t)baud) || cfsetispeed(&tio, (speed_t)baud))
+	{
+		fprintf(stderr, "serial/cfset(i/o)speed: %s'n", strerror(errno));
+		close(fd);
+		return -1;
+	}
+
+	tio.c_cflag |= (CLOCAL | CREAD);    /* ignore modem controls */
+	tio.c_cflag &= ~CSIZE;
+	//tio.c_cflag |= CS8;         /* 8-bit characters */
+	//tio.c_cflag &= ~PARENB;     /* no parity bit */
+	//tio.c_cflag &= ~CSTOPB;     /* only need 1 stop bit */
+	tio.c_cflag &= ~CRTSCTS;    /* no hardware flowcontrol */
+
+	/* setup for non-canonical mode */
+	tio.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
+	tio.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+	tio.c_oflag &= ~(OPOST | ONLCR | OXTABS | ONOEOT);
+
+	/* fetch bytes as they become available */
+	tio.c_cc[VMIN] = 0;
+	tio.c_cc[VTIME] = 0;
+
+#if 0	
+	switch (baud)
+	{
+	case 115200: tio.c_cflag |= B115200; break;
+	case 57600: tio.c_cflag |= B57600; break;
+	case 38400: tio.c_cflag |= B38400; break;
+	case 19200: tio.c_cflag |= B19200; break;
+	case 9600: tio.c_cflag |= B9600; break;
+	case 4800: tio.c_cflag |= B4800; break;
+	case 2400: tio.c_cflag |= B2400; break;
+	default:
+		fprintf(stderr, "invalid serial speed '%d'\n", baud);
+		close(fd);
+		return -1;
+	}
+#endif
+		
+	switch (mode[0] - '0')
+	{
+	case 8: tio.c_cflag |= CS8; break;
+	case 7: tio.c_cflag |= CS7; break;
+	case 6: tio.c_cflag |= CS6; break;
+	case 5: tio.c_cflag |= CS5; break;
+	default:
+		fprintf(stderr, "invalid serial data size '%c' in '%s'\n", mode[0], mode);
+		close(fd);
+		return -1;
+	}
+		
+	switch (tolower(mode[1]))
+	{
+	case 's':
+	case 'n': break;
+	case 'e': tio.c_cflag |= PARENB; break;
+	case 'o': tio.c_cflag |= PARENB | PARODD; break;
+	default:
+		fprintf(stderr, "invalid serial parity '%c' in '%s'\n", mode[1], mode);
+		close(fd);
+		return -1;
+	}
+		
+	switch (mode[2] - '0')
+	{
+	case 1: break;
+	case 2: tio.c_cflag |= CSTOPB; break;
+	default:
+		fprintf(stderr, "invalid serial stop bit '%c' in '%s'\n", mode[2], mode);
+		close(fd); 
+		return -1;
+	}
+		
+#if 0
+	tio.c_iflag = IGNPAR;
+	tio.c_oflag = 0;
+	tio.c_lflag = 0;   
+	tio.c_cc[VMIN] = 1;
+	tio.c_cc[VTIME] = 0;
+#endif
+		
+	// empty the output queue
+	if (tcflush(fd, TCIFLUSH) == -1)
+	{
+		fprintf(stderr, "tcflush: %s\n", strerror(errno));
+		close(fd);
+		return -1;
+	}
+
+	// set new attributes
+	if (tcsetattr(fd, TCSANOW, &tio) == -1)
+	{
+		fprintf(stderr, "serial/tcsetattr: %s\n", strerror(errno));
+		close(fd);
+		return -1;
+	}
+		
+	return fd;
+}
+
 int main (int argc, char* argv[])
 {
 	int op;
-	const char* host = "localhost";
+	const char* host = NULL;
+	const char* tty = NULL;
+	int ttyspeed = 115200;
+	const char* ttymode = "8n1";
 	int port = 10102;
 	int server = 0;
 	int activeserver = 0;
@@ -433,7 +581,7 @@ int main (int argc, char* argv[])
 	gettimeofday(&t, NULL);
 	srandom(t.tv_sec + t.tv_usec);
 
-	while ((op = getopt(argc, argv, "hp:d:fSc:s:A")) != EOF) switch(op)
+	while ((op = getopt(argc, argv, "hp:d:fSc:s:Ay:b:m:")) != EOF) switch(op)
 	{
 		case 'h':
 			help();
@@ -467,6 +615,18 @@ int main (int argc, char* argv[])
 			datasize = atoi(optarg);
 			break;
 		
+		case 'y':
+			tty = optarg;
+			break;
+		
+		case 'b':
+			ttyspeed = atoi(optarg);
+			break;
+		
+		case 'm':
+			ttymode = optarg;
+			break;
+		
 		default:
 			printf("option '%c' not recognized\n", op);
 			help();
@@ -481,6 +641,26 @@ int main (int argc, char* argv[])
 		default: bufout[i] = userchar;
 		}
 		
+	if (tty)
+	{
+		if (host)
+		{
+			fprintf(stderr, "tcp or serial?\n");
+			exit(1);
+		}
+		
+		int fd = serial_open(tty, ttyspeed, ttymode);
+		if (fd == -1)
+			exit(1);
+		
+		if (server)
+			echoserver(fd);
+		else
+			echotester(fd, datasize);
+	}
+	else
+		if (!host)
+			host = "localhost";
 
 	int sock = my_socket();
 	if (server)
