@@ -1,9 +1,1 @@
-#!/bin/sh
-
-ip="$1"
-port="$2"
-size="$3"
-
-while true; do
-	./tcpechotester -d $1 -p $2 -s -$3
-done
+./tcpechotester -r -s -1000 "$@"

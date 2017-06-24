@@ -141,7 +141,12 @@ void my_connect (const char* servername,  int port,  int sock)
 		abort();
 	}
 	
-	printf("connected to %s.\n", servername);
+	static int displayed = 0;
+	if (!displayed)
+	{
+		displayed = 1;
+		printf("connected to %s.\n", servername);
+	}
 }
 
 void my_close (int sock)
@@ -175,6 +180,7 @@ void help (void)
 	       "-p n	set tcp port (default %i)\n"
 	       "\n"
 	       "TCP client:\n"
+	       "-r repeat (with -s)\n"
 	       "-d host	set tcp remote host name\n"
 	       "(otherwise act as TCP server)\n"
 	       "\n", DEFAULTPORT);
@@ -266,16 +272,19 @@ void echocomparator (int sock, int datasize, ssize_t maxdiff)
 	
 	setcntl(sock, F_SETFL, O_NONBLOCK, "O_NONBLOCK");
 	
-	long long total_sent = 0, total_recvd = 0, recvd_for_avg = 0;
+	static long long repeat_recvd = 0;
+	long long recvd_for_avg = 0;
+	long long total_sent = 0, total_recvd = 0;
 	int ptr_to_send = 0;
 	int ptr_for_bufout_compare = 0;
 	struct pollfd pollfd;
-	struct timeval tb, ti, te;
+	static struct timeval tb, ti, te;
 	
 	if (datasize < 0)
 		datasize = (random() % -datasize) + 1;
 	
-	gettimeofday(&tb, NULL);
+	if (!repeat_recvd)
+		gettimeofday(&tb, NULL);
 	ti = tb;
 	
 	int cont = 1;
@@ -332,6 +341,7 @@ void echocomparator (int sock, int datasize, ssize_t maxdiff)
 					abort();
 				}
 				total_recvd += size;
+				repeat_recvd += size;
 				recvd_for_avg += size;
 				ptr_for_bufout_compare = (ptr_for_bufout_compare + size) & (BUFLEN - 1);
 				ret -= size;
@@ -346,7 +356,6 @@ void echocomparator (int sock, int datasize, ssize_t maxdiff)
 				size = datasize - total_sent;
 			if (maxdiff && size > (total_recvd - total_sent + maxdiff))
 				size = total_recvd - total_sent + maxdiff;
-assert(size);
 			if (size)
 			{
 				ssize_t ret = write(sock, bufout + ptr_to_send, size);
@@ -365,16 +374,16 @@ assert(size);
 		if (!cont || te.tv_sec - ti.tv_sec > 1)
 		{
 			printf("\r");
-			printbw(te.tv_sec - tb.tv_sec, te.tv_usec - tb.tv_usec, total_recvd, "avg:");
+			printbw(te.tv_sec - tb.tv_sec, te.tv_usec - tb.tv_usec, repeat_recvd, "avg:");
 			printbw(te.tv_sec - ti.tv_sec, te.tv_usec - ti.tv_usec, recvd_for_avg, "now:");
-			printsz(total_recvd, "size:");
+			printsz(repeat_recvd, "size:");
 			printf("-----"); fflush(stdout);
 			ti = te;
 			recvd_for_avg = 0;
 		}
 	}
 	
-	fprintf(stderr, "\nsend&received %lli / %lli bytes (%i)\n", total_sent, total_recvd, datasize);
+	fprintf(stderr, "  send&received %lli / %lli bytes (%i) -- \r", total_sent, repeat_recvd, datasize);
 
 	my_close(sock);
 }
@@ -589,13 +598,14 @@ int main (int argc, char* argv[])
 	int datasize = 0;
 	int nodelay = 0;
 	int doflushinput = 0;
+	int repeat = 0;
 	ssize_t maxdiff = 0;
 	
 	struct timeval t;
 	gettimeofday(&t, NULL);
 	srandom(t.tv_sec + t.tv_usec);
 
-	while ((op = getopt(argc, argv, "hp:d:fRc:s:Cy:b:m:nfw:")) != EOF) switch(op)
+	while ((op = getopt(argc, argv, "hp:d:fRc:s:Cy:b:m:nfw:r")) != EOF) switch(op)
 	{
 		case 'h':
 			help();
@@ -649,6 +659,10 @@ int main (int argc, char* argv[])
 			maxdiff = atoi(optarg);
 			break;
 		
+		case 'r':
+			repeat = 1;
+			break;
+		
 		default:
 			printf("option '%c' not recognized\n", op);
 			help();
@@ -657,8 +671,14 @@ int main (int argc, char* argv[])
 	
 	if (!(!!responder ^ !!comparator))
 	{
-		fprintf(stderr, "error: need only one of -R (responder) or -C (comparator) option\n\n");
+		fprintf(stderr, "error: need one and only one of -R (responder) or -C (comparator) option\n\n");
 		help();
+		return 1;
+	}
+	
+	if (repeat && (!datasize || !comparator))
+	{
+		fprintf(stderr, "use -C & -s with -r\n");
 		return 1;
 	}
 
@@ -689,32 +709,38 @@ int main (int argc, char* argv[])
 			if (doflushinput && !flushinput(fd))
 				return 1;
 			echocomparator(fd, datasize, maxdiff);
+			fprintf(stderr, "\n");
 		}
 	}
 
-	int sock = my_socket();
 	
 	if (host)
 	{
-		if (nodelay)
-			setflag(sock, -1, IPPROTO_TCP, TCP_NODELAY, 1, "TCP_NODELAY");
 
 		printf("remote host:	%s\n"
 		       "port:		%i\n",
 		       host, port);
 	
+	do
+	{
+		int sock = my_socket();
+		if (nodelay)
+			setflag(sock, -1, IPPROTO_TCP, TCP_NODELAY, 1, "TCP_NODELAY");
 		my_connect(host, port, sock);
 		if (responder)
 			echoresponder(sock);
 		else
 		{
-			if (doflushinput && !flushinput(sock))
-				return 1;
-			echocomparator(sock, datasize, maxdiff);
+				if (doflushinput && !flushinput(sock))
+					return 1;
+				echocomparator(sock, datasize, maxdiff);
 		}
+	} while (repeat);
+		fprintf(stderr, "\n");
 	}
 	else
 	{
+		int sock = my_socket();
 		my_bind_listen(sock, port);
 		while (1)
 		{
@@ -729,6 +755,7 @@ int main (int argc, char* argv[])
 				if (doflushinput && !flushinput(clisock))
 					return 1;
 				echocomparator(clisock, datasize, maxdiff);
+				fprintf(stderr, "\n");
 			}
 		}
 		close(sock);
