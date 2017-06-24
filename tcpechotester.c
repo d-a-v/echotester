@@ -278,14 +278,18 @@ void echocomparator (int sock, int datasize, ssize_t maxdiff)
 	int ptr_to_send = 0;
 	int ptr_for_bufout_compare = 0;
 	struct pollfd pollfd;
-	static struct timeval tb, ti, te;
+	static struct timeval tb, ti, te, tr;
+	static long long loop_count = 0;
 	
 	if (datasize < 0)
 		datasize = (random() % -datasize) + 1;
 	
 	if (!repeat_recvd)
+	{
 		gettimeofday(&tb, NULL);
-	ti = tb;
+		ti = tb;
+		tr = tb;
+	}
 	
 	int cont = 1;
 	pollfd.fd = sock;
@@ -371,7 +375,7 @@ void echocomparator (int sock, int datasize, ssize_t maxdiff)
 		
 		gettimeofday(&te, NULL);
 		cont = !datasize || datasize > total_sent || datasize > total_recvd;
-		if (!cont || te.tv_sec - ti.tv_sec > 1)
+		if ((!cont || te.tv_sec - ti.tv_sec > 1) && te.tv_sec >= tr.tv_sec)
 		{
 			printf("\r");
 			printbw(te.tv_sec - tb.tv_sec, te.tv_usec - tb.tv_usec, repeat_recvd, "avg:");
@@ -382,8 +386,13 @@ void echocomparator (int sock, int datasize, ssize_t maxdiff)
 			recvd_for_avg = 0;
 		}
 	}
-	
-	fprintf(stderr, "  send&received %lli / %lli bytes (%i) -- \r", total_sent, repeat_recvd, datasize);
+
+	++loop_count;	
+	if (te.tv_sec >= tr.tv_sec)
+	{
+		fprintf(stderr, "  send&received %lli / %lli bytes (=%i) -- (#%lld)\r", total_sent, repeat_recvd, datasize, loop_count);
+		tr.tv_sec += 1;
+	}
 
 	my_close(sock);
 }
@@ -721,21 +730,21 @@ int main (int argc, char* argv[])
 		       "port:		%i\n",
 		       host, port);
 	
-	do
-	{
-		int sock = my_socket();
-		if (nodelay)
-			setflag(sock, -1, IPPROTO_TCP, TCP_NODELAY, 1, "TCP_NODELAY");
-		my_connect(host, port, sock);
-		if (responder)
-			echoresponder(sock);
-		else
+		do
 		{
-				if (doflushinput && !flushinput(sock))
-					return 1;
-				echocomparator(sock, datasize, maxdiff);
-		}
-	} while (repeat);
+			int sock = my_socket();
+			if (nodelay)
+				setflag(sock, -1, IPPROTO_TCP, TCP_NODELAY, 1, "TCP_NODELAY");
+			my_connect(host, port, sock);
+			if (responder)
+				echoresponder(sock);
+			else
+			{
+					if (doflushinput && !flushinput(sock))
+						return 1;
+					echocomparator(sock, datasize, maxdiff);
+			}
+		} while (repeat);
 		fprintf(stderr, "\n");
 	}
 	else
