@@ -1,1 +1,1 @@
-./tcpechotester -r -s -1000 "$@"
+./tcpechotester -C -r -s -1000 -d "$@"

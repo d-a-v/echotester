@@ -177,11 +177,11 @@ void help (void)
 	       "\n"
 	       "TCP:\n"
 	       "-n	set TCP_NODELAY option\n"
-	       "-p n	set tcp port (default %i)\n"
 	       "\n"
 	       "TCP client:\n"
-	       "-r repeat (with -s)\n"
+	       "-r repeat (close/reopen, with -s)\n"
 	       "-d host	set tcp remote host name\n"
+	       "-p n	set tcp port (default %i)\n"
 	       "(otherwise act as TCP server)\n"
 	       "\n", DEFAULTPORT);
 }
