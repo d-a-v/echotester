@@ -506,6 +506,12 @@ int serial_open (const char* dev, int baud, const char* mode)
 	speed_t b = 0;
 	switch (baud)
 	{
+	case 1000000: b = B1000000; break;
+	case 921600: b = B921600; break;
+	case 576000: b = B576000; break;
+	case 500000: b = B500000; break;
+	case 460800: b = B460800; break;
+	case 230400: b = B230400; break;
 	case 115200: b = B115200; break;
 	case 57600: b = B57600; break;
 	case 38400: b = B38400; break;
