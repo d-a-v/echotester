@@ -34,21 +34,21 @@ void getsetflag (int sock, int sock2, int level, int flag, int val, const char* 
 	if (getsockopt(sock, level, flag, ret, &retlen) == -1)
 	{
 		perror("getsockopt");
-		abort();
+		exit(1);
 	}
 	printf("flag = %s(%i): %i(len=%i) - set it to %i - ", name, flag, *(int*)ret, retlen, locval);
 	fflush(stdout);
 	if (setsockopt(sock, level, flag, &locval, sizeof(locval)) == -1)
 	{
 		perror("setsockopt");
-		abort();
+		exit(1);
 	}
 	retlen = sizeof(int);
 	*(int*)ret = 0;
 	if (getsockopt(sock, level, flag, &ret, &retlen) == -1)
 	{
 		perror("getsockopt");
-		abort();
+		exit(1);
 	}
 	printf("re-read: %i(len=%i)\n", *(int*)ret, retlen);
 	
@@ -64,7 +64,7 @@ void setflag (int sock, int sock2, int level, int flag, int val, const char* nam
 	if (setsockopt(sock, level, flag, &locval, sizeof(locval)) == -1)
 	{
 		perror("setsockopt");
-		abort();
+		exit(1);
 	}
 	if (sock2 > 0 && sock2 != sock)
 		setflag(sock2, -1, level, flag, val, name);
@@ -76,7 +76,7 @@ int my_socket (void)
 	if ((sock = socket(AF_INET, SOCK_STREAM, 0)) == -1)
 	{
 		perror("socket()");
-		abort();
+		exit(1);
 	}
 	return sock;
 }
@@ -91,13 +91,13 @@ void my_bind_listen (int srvsock,  int port)
 	if (bind(srvsock, (struct sockaddr*)&server, sizeof(server)) == -1)
 	{
 		perror("bind()");
-		abort();
+		exit(1);
 	}
 	
 	if (listen(srvsock, 1) == -1)
 	{
 		perror("listen()");
-		abort();
+		exit(1);
 	}
 	
 	printf("bind & listen done.\n");
@@ -113,7 +113,7 @@ int my_accept (int srvsock)
 	if ((clisock = accept(srvsock, (struct sockaddr*)&client, &n)) == -1)
 	{
 		perror("accept()");
-		abort();
+		exit(1);
 	}
 	
 	printf("remote client arrived.\n");
@@ -129,7 +129,7 @@ void my_connect (const char* servername,  int port,  int sock)
 	if ((desc_server = gethostbyname(servername)) == NULL)
 	{
 		perror("gethostbyname()");
-		abort();
+		exit(1);
 	}
 	
 	server.sin_family = AF_INET;
@@ -138,7 +138,7 @@ void my_connect (const char* servername,  int port,  int sock)
 	if (connect(sock, (struct sockaddr*)&server, sizeof(server)) == -1)
 	{
 		perror("connect()");
-		abort();
+		exit(1);
 	}
 	
 	static int displayed = 0;
@@ -162,6 +162,8 @@ void help (void)
 	       "-f	flush input before start\n"
 	       "-R	responder (read and send back)\n"
 	       "-C	comparator (send and check back)\n"
+	       "-K	sink\n"
+	       "-S	source\n"
 	       "\n"
 	       "Comparator specifics:\n"
 	       "-c n	use this char instead of random data\n"
@@ -264,6 +266,24 @@ int flushinput (int sock)
 	}
 }
 
+struct timeval tb, ti, te; // begin intermediary end
+long long data_in_loop = 0;
+long long data_overall = 0;
+
+void showbw (int force)
+{
+	if (force || te.tv_sec - ti.tv_sec > 1)
+	{
+		printf("\r");
+		printbw(te.tv_sec - tb.tv_sec, te.tv_usec - tb.tv_usec, data_overall, "avg:");
+		printbw(te.tv_sec - ti.tv_sec, te.tv_usec - ti.tv_usec, data_in_loop, "now:");
+		printsz(data_overall, "size:");
+		printf("-----"); fflush(stdout);
+		ti = te;
+		data_in_loop = 0;
+	}
+}
+
 void echocomparator (int sock, int datasize, ssize_t maxdiff)
 {
 	// bufout is already filled and not modified
@@ -272,19 +292,17 @@ void echocomparator (int sock, int datasize, ssize_t maxdiff)
 	
 	setcntl(sock, F_SETFL, O_NONBLOCK, "O_NONBLOCK");
 	
-	static long long repeat_recvd = 0;
-	long long recvd_for_avg = 0;
 	long long total_sent = 0, total_recvd = 0;
 	int ptr_to_send = 0;
 	int ptr_for_bufout_compare = 0;
 	struct pollfd pollfd;
-	static struct timeval tb, ti, te, tr;
+	static struct timeval tr;
 	static long long loop_count = 0;
 	
 	if (datasize < 0)
 		datasize = (random() % -datasize) + 1;
 	
-	if (!repeat_recvd)
+	if (!data_overall)
 	{
 		gettimeofday(&tb, NULL);
 		ti = tb;
@@ -303,7 +321,7 @@ void echocomparator (int sock, int datasize, ssize_t maxdiff)
 		if (ret == -1)
 		{
 			perror("poll");
-			abort();
+			exit(1);
 		}
 
 		if (pollfd.revents & POLLIN)
@@ -312,7 +330,7 @@ void echocomparator (int sock, int datasize, ssize_t maxdiff)
 			if (ret == -1)
 			{
 				perror("read");
-				abort();
+				exit(1);
 			}
 			ssize_t bufin_offset = 0;
 			while (ret)
@@ -342,11 +360,11 @@ void echocomparator (int sock, int datasize, ssize_t maxdiff)
 						printf("@%llx:R%02x/S%02x (diff)\n", j + total_recvd, (uint8_t)bufin[j + bufin_offset], (uint8_t)bufout[(j + ptr_for_bufout_compare) & (BUFLEN - 1)]);
 					printf("\n");
 					
-					abort();
+					exit(1);
 				}
 				total_recvd += size;
-				repeat_recvd += size;
-				recvd_for_avg += size;
+				data_overall += size;
+				data_in_loop += size;
 				ptr_for_bufout_compare = (ptr_for_bufout_compare + size) & (BUFLEN - 1);
 				ret -= size;
 				bufin_offset += size;
@@ -366,31 +384,23 @@ void echocomparator (int sock, int datasize, ssize_t maxdiff)
 				if (ret == -1)
 				{
 					perror("write");
-					abort();
+					exit(1);
 				}
 				total_sent += ret;
 				ptr_to_send = (ptr_to_send + ret) & (BUFLEN - 1);
 			}
 		}
-		
+
 		gettimeofday(&te, NULL);
 		cont = !datasize || datasize > total_sent || datasize > total_recvd;
-		if ((!cont || te.tv_sec - ti.tv_sec > 1) && te.tv_sec >= tr.tv_sec)
-		{
-			printf("\r");
-			printbw(te.tv_sec - tb.tv_sec, te.tv_usec - tb.tv_usec, repeat_recvd, "avg:");
-			printbw(te.tv_sec - ti.tv_sec, te.tv_usec - ti.tv_usec, recvd_for_avg, "now:");
-			printsz(repeat_recvd, "size:");
-			printf("-----"); fflush(stdout);
-			ti = te;
-			recvd_for_avg = 0;
-		}
+		if (te.tv_sec >= tr.tv_sec)
+			showbw(!cont);
 	}
 
 	++loop_count;	
 	if (te.tv_sec >= tr.tv_sec)
 	{
-		fprintf(stderr, "  send&received %lli / %lli bytes (=%i) -- (#%lld)\r", total_sent, repeat_recvd, datasize, loop_count);
+		fprintf(stderr, "  send&received %lli / %lli bytes (=%i) -- (#%lld)\r", total_sent, data_overall, datasize, loop_count);
 		tr.tv_sec += 1;
 	}
 
@@ -459,6 +469,102 @@ void echoresponder (int sock)
 			fprintf(stderr, "unregular event occured\n");
 			break;
 		}
+	}
+
+	my_close(sock);
+}
+
+void echosink (int sock)
+{
+	struct pollfd pollfd = { .fd = sock, .events = POLLIN, };
+	
+	gettimeofday(&tb, NULL);
+	ti = tb;
+
+	while (1)
+	{
+		int ret = poll(&pollfd, 1, 1000 /*ms*/);
+		if (ret == -1)
+		{
+			perror("poll");
+			close(sock);
+			return;
+		}
+
+		if (pollfd.revents & POLLIN)
+		{
+			ssize_t ret = read(sock, bufin, BUFLEN);
+			if (ret == -1)
+			{
+				perror("read");
+				break;
+			}
+			if (ret == 0)
+			{
+				fprintf(stderr, "peer has closed\n");
+				break;
+			}
+			data_in_loop += ret;
+			data_overall += ret;
+		}
+		
+		if (pollfd.revents & ~(POLLIN | POLLOUT))
+		{
+			fprintf(stderr, "unregular event occured\n");
+			break;
+		}
+		
+		gettimeofday(&te, NULL);
+		showbw(0);
+	}
+
+	my_close(sock);
+}
+
+void echosource (int sock)
+{
+	setcntl(sock, F_SETFL, O_NONBLOCK, "O_NONBLOCK");
+	
+	struct pollfd pollfd = { .fd = sock, .events = POLLOUT, };
+	
+	gettimeofday(&tb, NULL);
+	ti = tb;
+
+	while (1)
+	{
+		int ret = poll(&pollfd, 1, 1000 /*ms*/);
+		if (ret == -1)
+		{
+			perror("poll");
+			close(sock);
+			return;
+		}
+
+		if (pollfd.revents & POLLOUT)
+		{
+			ssize_t ret = write(sock, bufout, BUFLEN);
+			if (ret == -1)
+			{
+				perror("write");
+				break;
+			}
+			if (ret == 0)
+			{
+				fprintf(stderr, "peer has closed\n");
+				break;
+			}
+			data_in_loop += ret;
+			data_overall += ret;
+		}
+		
+		if (pollfd.revents & ~(POLLIN | POLLOUT))
+		{
+			fprintf(stderr, "unregular event occured\n");
+			break;
+		}
+
+		gettimeofday(&te, NULL);
+		showbw(0);
 	}
 
 	my_close(sock);
@@ -608,6 +714,8 @@ int main (int argc, char* argv[])
 	int port = DEFAULTPORT;
 	int responder = 0;
 	int comparator = 0;
+	int sink = 0;
+	int source = 0;
 	int i;
 	int userchar = 0;
 	int datasize = 0;
@@ -620,7 +728,7 @@ int main (int argc, char* argv[])
 	gettimeofday(&t, NULL);
 	srandom(t.tv_sec + t.tv_usec);
 
-	while ((op = getopt(argc, argv, "hp:d:fRc:s:Cy:b:m:nfw:r")) != EOF) switch(op)
+	while ((op = getopt(argc, argv, "hp:d:fRc:s:Cy:b:m:nfw:rKS")) != EOF) switch(op)
 	{
 		case 'h':
 			help();
@@ -648,6 +756,14 @@ int main (int argc, char* argv[])
 		
 		case 'C':
 			comparator = 1;
+			break;
+		
+		case 'K':
+			sink = 1;
+			break;
+		
+		case 'S':
+			source = 1;
 			break;
 		
 		case 'c':
@@ -684,9 +800,9 @@ int main (int argc, char* argv[])
 			return 1;
 	}
 	
-	if (!(!!responder ^ !!comparator))
+	if (comparator + responder + sink + source > 1 || comparator + responder + sink + source == 0)
 	{
-		fprintf(stderr, "error: need one and only one of -R (responder) or -C (comparator) option\n\n");
+		fprintf(stderr, "error: need one and only one of -R (responder) or -C (comparator) or -S (source) or -K (sink) option\n\n");
 		help();
 		return 1;
 	}
@@ -717,7 +833,11 @@ int main (int argc, char* argv[])
 		if (fd == -1)
 			exit(1);
 		
-		if (responder)
+		if (sink)
+			echosink(fd);
+		else if (source)
+			echosource(fd);
+		else if (responder)
 			echoresponder(fd);
 		else
 		{
@@ -742,13 +862,17 @@ int main (int argc, char* argv[])
 			if (nodelay)
 				setflag(sock, -1, IPPROTO_TCP, TCP_NODELAY, 1, "TCP_NODELAY");
 			my_connect(host, port, sock);
-			if (responder)
+			if (sink)
+				echosink(sock);
+			else if (source)
+				echosource(sock);
+			else if (responder)
 				echoresponder(sock);
 			else
 			{
-					if (doflushinput && !flushinput(sock))
-						return 1;
-					echocomparator(sock, datasize, maxdiff);
+				if (doflushinput && !flushinput(sock))
+					return 1;
+				echocomparator(sock, datasize, maxdiff);
 			}
 		} while (repeat);
 		fprintf(stderr, "\n");
@@ -762,8 +886,12 @@ int main (int argc, char* argv[])
 			printf("waiting on port %i\n", port);
 			int clisock = my_accept(sock);
 			if (nodelay)
-				setflag(clisock, -1, IPPROTO_TCP, TCP_NODELAY, 1, "TCP_NODELAY");
-			if (responder)
+				setflag(clisock, -1, IPPROTO_TCP, TCP_NODELAY, 1, "TCP_NODELAY");\
+			if (sink)
+				echosink(clisock);
+			else if (source)
+				echosource(clisock);
+			else if (responder)
 				echoresponder(clisock);
 			else // comparator
 			{
