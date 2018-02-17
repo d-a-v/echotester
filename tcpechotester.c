@@ -16,6 +16,7 @@
 #include <errno.h>
 #include <ctype.h>
 #include <assert.h>
+#include <signal.h>
 
 #define DEFAULTPORT 6969 // spin round
 #define BUFLENLOG2 10
@@ -184,7 +185,13 @@ void help (void)
 	       "-r repeat (close/reopen, with -s)\n"
 	       "-d host	set tcp remote host name\n"
 	       "-p n	set tcp port (default %i)\n"
-	       "(otherwise act as TCP server)\n"
+	       "(otherwise act as TCP server if no Serial)\n"
+	       "\n"
+	       "SSL/TLS client (fork/use external socat tool):\n"
+	       "\toption -r will also kill/restart socat)\n"
+	       "\tconflicts with -y\n"
+	       "\tneeds -d\n"
+	       "-M method (TLS1.2,...)\n"
 	       "\n", DEFAULTPORT);
 }
 
@@ -592,7 +599,6 @@ int serial_open (const char* dev, int baud, const char* mode)
 
 	tio.c_cflag = 0;
 
-
 	tio.c_cflag |= (CLOCAL | CREAD);    /* ignore modem controls */
 	tio.c_cflag &= ~CSIZE;
 	//tio.c_cflag |= CS8;         /* 8-bit characters */
@@ -711,6 +717,7 @@ int main (int argc, char* argv[])
 	const char* tty = NULL;
 	int ttyspeed = 115200;
 	const char* ttymode = "8n1";
+	const char* method = NULL;
 	int port = DEFAULTPORT;
 	int responder = 0;
 	int comparator = 0;
@@ -728,7 +735,7 @@ int main (int argc, char* argv[])
 	gettimeofday(&t, NULL);
 	srandom(t.tv_sec + t.tv_usec);
 
-	while ((op = getopt(argc, argv, "hp:d:fRc:s:Cy:b:m:nfw:rKS")) != EOF) switch(op)
+	while ((op = getopt(argc, argv, "hp:d:fRc:s:Cy:b:m:nfw:rKSM:")) != EOF) switch(op)
 	{
 		case 'h':
 			help();
@@ -794,6 +801,10 @@ int main (int argc, char* argv[])
 			repeat = 1;
 			break;
 		
+		case 'M':
+			method = optarg;
+			break;
+		
 		default:
 			printf("option '%c' not recognized\n", op);
 			help();
@@ -813,6 +824,12 @@ int main (int argc, char* argv[])
 		return 1;
 	}
 
+	if (method && tty)
+	{
+		fprintf(stderr, "error: -y and -M conflict\n");
+		exit(1);
+	}
+
 	for (i = 0; i < BUFLEN; i++)
 		switch (userchar)
 		{
@@ -820,7 +837,63 @@ int main (int argc, char* argv[])
 		case 0: bufout[i] = random() >> 23; break;
 		default: bufout[i] = userchar;
 		}
-		
+	
+	if (method)
+	{
+		tty = "/tmp/blork";
+		char* socat1 = (char*)malloc(1024);
+		char* socat2 = (char*)malloc(1024);
+		sprintf(socat1, "pty,link=%s",
+			tty);
+		sprintf(socat2, "ssl:%s:%i,method=%s,verify=0,reuseaddr",
+			host, port, method);
+				
+		int fd = -1;
+		do
+		{
+			// fork/exec socat
+			int pid = fork();
+			switch (pid)
+			{
+			case -1: perror("fork"); exit(1);
+			case 0: break;
+			default:
+			{
+				if (fd == -1)
+					fprintf(stderr, "exec: socat %s %s\n", socat1, socat2);
+				execlp("socat", "socat", socat1, socat2, NULL);
+				perror("exec(socat)");
+				kill(getppid(), SIGINT);
+				exit(EXIT_FAILURE);
+			}
+			}
+			
+			// link is about to be created, open link
+			if (fd == -1)
+			{
+				int try = 3;
+				do
+				{
+					sleep(1);
+					if ((fd = serial_open(tty, ttyspeed, ttymode)) != -1)
+						break;
+				} while (--try > 0);
+				if (fd == -1)
+					exit(EXIT_FAILURE);
+				if (doflushinput && !flushinput(fd))
+					exit(EXIT_FAILURE);
+			}
+
+				
+			echocomparator(fd, datasize, maxdiff);
+			
+			// kill socat
+			kill(pid, SIGINT);
+		} while (repeat);
+
+		return 0;
+	}
+
 	if (tty)
 	{
 		if (host)
