@@ -191,7 +191,7 @@ void help (void)
 	       "\toption -r will also kill/restart socat)\n"
 	       "\tconflicts with -y\n"
 	       "\tneeds -d\n"
-	       "-M method (TLS1.2,...)\n"
+	       "-M method (socat's methods, like TLS1.2,...)\n"
 	       "\n", DEFAULTPORT);
 }
 
@@ -348,7 +348,6 @@ void echocomparator (int sock, int datasize, ssize_t maxdiff)
 				if (memcmp(bufin + bufin_offset, bufout + ptr_for_bufout_compare, size) != 0)
 				{
 					fprintf(stderr, "\ndata differ (sent=%lli revcd=%lli ptrsend=%i ptr_for_bufout_compare=%i ret=%i size=%i)\n", total_sent, total_recvd, ptr_to_send, ptr_for_bufout_compare, (int)ret, (int)size);
-					
 					int i;
 					for (i = 0; i < size; i++)
 						if (bufin[i + bufin_offset] != bufout[i + ptr_for_bufout_compare])
