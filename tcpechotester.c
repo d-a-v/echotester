@@ -35,21 +35,21 @@ void getsetflag (int sock, int sock2, int level, int flag, int val, const char* 
 	if (getsockopt(sock, level, flag, ret, &retlen) == -1)
 	{
 		perror("getsockopt");
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 	printf("flag = %s(%i): %i(len=%i) - set it to %i - ", name, flag, *(int*)ret, retlen, locval);
 	fflush(stdout);
 	if (setsockopt(sock, level, flag, &locval, sizeof(locval)) == -1)
 	{
 		perror("setsockopt");
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 	retlen = sizeof(int);
 	*(int*)ret = 0;
 	if (getsockopt(sock, level, flag, &ret, &retlen) == -1)
 	{
 		perror("getsockopt");
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 	printf("re-read: %i(len=%i)\n", *(int*)ret, retlen);
 	
@@ -65,7 +65,7 @@ void setflag (int sock, int sock2, int level, int flag, int val, const char* nam
 	if (setsockopt(sock, level, flag, &locval, sizeof(locval)) == -1)
 	{
 		perror("setsockopt");
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 	if (sock2 > 0 && sock2 != sock)
 		setflag(sock2, -1, level, flag, val, name);
@@ -77,7 +77,7 @@ int my_socket (void)
 	if ((sock = socket(AF_INET, SOCK_STREAM, 0)) == -1)
 	{
 		perror("socket()");
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 	return sock;
 }
@@ -92,13 +92,13 @@ void my_bind_listen (int srvsock,  int port)
 	if (bind(srvsock, (struct sockaddr*)&server, sizeof(server)) == -1)
 	{
 		perror("bind()");
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 	
 	if (listen(srvsock, 1) == -1)
 	{
 		perror("listen()");
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 	
 	printf("bind & listen done.\n");
@@ -114,7 +114,7 @@ int my_accept (int srvsock)
 	if ((clisock = accept(srvsock, (struct sockaddr*)&client, &n)) == -1)
 	{
 		perror("accept()");
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 	
 	printf("remote client arrived.\n");
@@ -130,7 +130,7 @@ void my_connect (const char* servername,  int port,  int sock)
 	if ((desc_server = gethostbyname(servername)) == NULL)
 	{
 		perror("gethostbyname()");
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 	
 	server.sin_family = AF_INET;
@@ -139,7 +139,7 @@ void my_connect (const char* servername,  int port,  int sock)
 	if (connect(sock, (struct sockaddr*)&server, sizeof(server)) == -1)
 	{
 		perror("connect()");
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 	
 	static int displayed = 0;
@@ -182,7 +182,7 @@ void help (void)
 	       "-n	set TCP_NODELAY option\n"
 	       "\n"
 	       "TCP client:\n"
-	       "-r repeat (close/reopen, with -s)\n"
+	       "-r      repeat (close/reopen, with -s)\n"
 	       "-d host	set tcp remote host name\n"
 	       "-p n	set tcp port (default %i)\n"
 	       "(otherwise act as TCP server if no Serial)\n"
@@ -328,16 +328,19 @@ void echocomparator (int sock, int datasize, ssize_t maxdiff)
 		if (ret == -1)
 		{
 			perror("poll");
-			exit(1);
+			exit(EXIT_FAILURE);
 		}
 
 		if (pollfd.revents & POLLIN)
 		{
 			ssize_t ret = read(sock, bufin, BUFLEN);
+			if (ret == 0)
+				// closed?
+				break;
 			if (ret == -1)
 			{
 				perror("read");
-				exit(1);
+				exit(EXIT_FAILURE);
 			}
 			ssize_t bufin_offset = 0;
 			while (ret)
@@ -366,7 +369,7 @@ void echocomparator (int sock, int datasize, ssize_t maxdiff)
 						printf("@%llx:R%02x/S%02x (diff)\n", j + total_recvd, (uint8_t)bufin[j + bufin_offset], (uint8_t)bufout[(j + ptr_for_bufout_compare) & (BUFLEN - 1)]);
 					printf("\n");
 					
-					exit(1);
+					exit(EXIT_FAILURE);
 				}
 				total_recvd += size;
 				data_overall += size;
@@ -390,7 +393,7 @@ void echocomparator (int sock, int datasize, ssize_t maxdiff)
 				if (ret == -1)
 				{
 					perror("write");
-					exit(1);
+					exit(EXIT_FAILURE);
 				}
 				total_sent += ret;
 				ptr_to_send = (ptr_to_send + ret) & (BUFLEN - 1);
@@ -406,7 +409,7 @@ void echocomparator (int sock, int datasize, ssize_t maxdiff)
 	++loop_count;	
 	if (te.tv_sec >= tr.tv_sec)
 	{
-		fprintf(stderr, "  send&received %lli / %lli bytes (=%i) -- (#%lld)\r", total_sent, data_overall, datasize, loop_count);
+		fprintf(stderr, "  send&received %lli / %lli bytes (=%i) -- (#%lld)          \r", total_sent, data_overall, datasize, loop_count);
 		tr.tv_sec += 1;
 	}
 
@@ -576,7 +579,7 @@ void echosource (int sock)
 	my_close(sock);
 }
 
-int serial_open (const char* dev, int baud, const char* mode)
+int serial_open (const char* dev, int baud, const char* mode, int verbose)
 {
 	struct termios tio;
 
@@ -587,7 +590,8 @@ int serial_open (const char* dev, int baud, const char* mode)
 		return -1;
 	}
 	
-	fprintf(stderr, "serial device '%s' opened, fd=%i - trying %s/%i\n", dev, fd, mode, baud);
+	if (verbose)
+		fprintf(stderr, "serial device '%s' opened, fd=%i - trying %s/%i\n", dev, fd, mode, baud);
 		
 	if (tcgetattr(fd, &tio) == -1)
 	{
@@ -826,7 +830,7 @@ int main (int argc, char* argv[])
 	if (method && tty)
 	{
 		fprintf(stderr, "error: -y and -M conflict\n");
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 
 	for (i = 0; i < BUFLEN; i++)
@@ -839,10 +843,12 @@ int main (int argc, char* argv[])
 	
 	if (method)
 	{
-		tty = "/tmp/blork";
+		char* loctty = (char*)malloc(1024);
 		char* socat1 = (char*)malloc(1024);
 		char* socat2 = (char*)malloc(1024);
-		sprintf(socat1, "pty,link=%s",
+		sprintf(loctty, "/tmp/tcpechotester-socat-%li", (long)getpid());
+		tty = loctty;
+		sprintf(socat1, "pty,link=%s,unlink-close,wait-slave",
 			tty);
 		sprintf(socat2, "ssl:%s:%i,method=%s,verify=0,reuseaddr",
 			host, port, method);
@@ -854,9 +860,8 @@ int main (int argc, char* argv[])
 			int pid = fork();
 			switch (pid)
 			{
-			case -1: perror("fork"); exit(1);
-			case 0: break;
-			default:
+			case -1: perror("fork"); exit(EXIT_FAILURE);
+			case 0:
 			{
 				if (fd == -1)
 					fprintf(stderr, "exec: socat %s %s\n", socat1, socat2);
@@ -868,22 +873,18 @@ int main (int argc, char* argv[])
 			}
 			
 			// link is about to be created, open link
-			if (fd == -1)
+			int try = 3;
+			do
 			{
-				int try = 3;
-				do
-				{
-					sleep(1);
-					if ((fd = serial_open(tty, ttyspeed, ttymode)) != -1)
-						break;
-				} while (--try > 0);
-				if (fd == -1)
-					exit(EXIT_FAILURE);
-				if (doflushinput && !flushinput(fd))
-					exit(EXIT_FAILURE);
-			}
+				usleep(10000); // 10ms
+				if ((fd = serial_open(tty, ttyspeed, ttymode, fd == -1)) != -1)
+					break;
+			} while (--try > 0);
+			if (fd == -1)
+				exit(EXIT_FAILURE);
+			if (doflushinput && !flushinput(fd))
+				exit(EXIT_FAILURE);
 
-				
 			echocomparator(fd, datasize, maxdiff);
 			
 			// kill socat
@@ -898,12 +899,12 @@ int main (int argc, char* argv[])
 		if (host)
 		{
 			fprintf(stderr, "tcp client or serial?\n");
-			exit(1);
+			exit(EXIT_FAILURE);
 		}
 		
-		int fd = serial_open(tty, ttyspeed, ttymode);
+		int fd = serial_open(tty, ttyspeed, ttymode, 1);
 		if (fd == -1)
-			exit(1);
+			exit(EXIT_FAILURE);
 		
 		if (sink)
 			echosink(fd);
