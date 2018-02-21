@@ -39,7 +39,7 @@ On esp8266, flash the sketch ```echoSerial.ino```.
 The serial checker can be used this way, with the initial flush option:
 
 ```
-$ ./tcpechotester  -R -y /dev/ttyUSB0 -b 115200 -m 8n1 -f
+$ ./tcpechotester -R -y /dev/ttyUSB0 -b 115200 -m 8n1 -f
 ```
 
 ### TCP loopback
@@ -49,7 +49,19 @@ On esp8266, flash the sketch ```echoTCP.ino```.
 The TCP checker can be used this way (default port 6969):
 
 ```
-$ ./tcpechotester  -C -d 1.2.3.4
+$ ./tcpechotester -C -d 1.2.3.4
+```
+
+### SSL/TLS loopback
+
+On esp8266, flash the sketch ```echoTCP2.ino``` with SSL/TLS proper options.
+
+Install ```socat``` on host PC.
+
+The TCP SSL/TLS client-only-checker can be used this way (default port 6969):
+
+```
+$ ./tcpechotester -C -d 1.2.3.4 -M TLS1.2 -w 256 -s -4096 -r
 ```
 
 ### serial <-> TCP passthrough
@@ -64,11 +76,11 @@ PC(checker) =wlan=> esp8266 =serial=> PC(repeater) =serial=> esp8266 =wlan=> PC(
 
 On one console, start the serial repeater for the serial port:
 ```
-$ ./tcpechotester  -R -y /dev/ttyUSB0 -b 115200 -m 8n1
+$ ./tcpechotester -R -y /dev/ttyUSB0 -b 115200 -m 8n1
 ```
 Then, on another console, start the TCP checker, with the initial flush option:
 ```
-$ ./tcpechotester  -C -d 1.2.3.4 -p 23 -f
+$ ./tcpechotester -C -d 1.2.3.4 -p 23 -f
 ```
 
 ## cmdline Help:
@@ -98,8 +110,15 @@ TCP:
 -n	set TCP_NODELAY option
 
 TCP client:
--r repeat (close/reopen, with -s)
+-r      repeat (close/reopen, with -s)
 -d host	set tcp remote host name
 -p n	set tcp port (default 6969)
-(otherwise act as TCP server)
+(otherwise act as TCP server if no Serial)
+
+SSL/TLS client:
+	fork/use external socat tool
+	option -r will also kill/restart socat
+	conflicts with -y
+	needs -d
+-M method (socat's methods, like TLS1.2,...)
 ```
