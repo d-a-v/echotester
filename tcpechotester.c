@@ -351,7 +351,12 @@ void echocomparator (int sock, int datasize, ssize_t maxdiff)
 					size = BUFLEN - ptr_for_bufout_compare;
 				if (memcmp(bufin + bufin_offset, bufout + ptr_for_bufout_compare, size) != 0)
 				{
-					fprintf(stderr, "\ndata differ (sent=%lli revcd=%lli ptrsend=%i ptr_for_bufout_compare=%i ret=%i size=%i)\n", total_sent, total_recvd, ptr_to_send, ptr_for_bufout_compare, (int)ret, (int)size);
+					fprintf(stderr, "\ndata differ (sent=%lli revcd=%lli ptrsend=%i ptr_for_bufout_compare=%i tocheck=%i)\n",
+						total_sent,
+						total_recvd,
+						ptr_to_send,
+						ptr_for_bufout_compare,
+						(int)ret);
 					int i;
 					for (i = 0; i < size; i++)
 						if (bufin[i + bufin_offset] != bufout[i + ptr_for_bufout_compare])
