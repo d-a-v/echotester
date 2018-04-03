@@ -369,10 +369,23 @@ void echocomparator (int sock, int datasize, ssize_t maxdiff)
 					// show SHOW before
 					ssize_t start = i - SHOW;
 					for (ssize_t j = start + BUFLEN; j < i + BUFLEN; j++)
-						printf("@%llx:R%02x/S%02x\n", j + total_recvd - BUFLEN, (uint8_t)bufout[(j + ptr_for_bufout_compare) & (BUFLEN - 1)], (uint8_t)bufout[(j + ptr_for_bufout_compare) & (BUFLEN - 1)]);
+					{
+						unsigned char c = bufout[(j + ptr_for_bufout_compare) & (BUFLEN - 1)];
+						printf("@%llx:R%02x(%c)/S%02x(%c)\n",
+							j + total_recvd - BUFLEN,
+							c, c>31?c:'.',
+							c, c>31?c:'.');
+					}
 					// show SHOW after
 					for (ssize_t j = i; j < i + SHOW && j + bufin_offset < size; j++)
-						printf("@%llx:R%02x/S%02x (diff)\n", j + total_recvd, (uint8_t)bufin[j + bufin_offset], (uint8_t)bufout[(j + ptr_for_bufout_compare) & (BUFLEN - 1)]);
+					{
+						unsigned char c = (uint8_t)bufin[j + bufin_offset];
+						unsigned char d = (uint8_t)bufout[(j + ptr_for_bufout_compare) & (BUFLEN - 1)];
+						printf("@%llx:R%02x(%c)/S%02x(%c) (diff)\n",
+							j + total_recvd,
+							c, c>31?c:'.',
+							d, d>31?d:'.');
+					}
 					printf("\n");
 					
 					exit(EXIT_FAILURE);
