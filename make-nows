@@ -1,0 +1,4 @@
+#!/bin/sh
+nows=../../js/wsc
+set -x
+gcc -O0 -ggdb -Wall -Wextra -I$nows -I$nows/utility tcpechotester.c $nows/wsposix/wsposix.c $nows/utility/*.c -o tcpechotester
